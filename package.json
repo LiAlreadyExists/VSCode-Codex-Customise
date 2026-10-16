@@ -1,0 +1,49 @@
+{
+  "name": "vscode-codex-customise",
+  "displayName": "VSCode-Codex-Customise",
+  "description": "Custom TODO triggers, prompts and destination threads for Codex.",
+  "version": "0.1.4",
+  "publisher": "local-customise",
+  "license": "MIT",
+  "engines": { "vscode": "^1.96.2" },
+  "categories": ["Other"],
+  "keywords": ["codex", "todo", "codelens"],
+  "main": "./dist/extension.js",
+  "activationEvents": ["onStartupFinished"],
+  "extensionKind": ["workspace"],
+  "extensionDependencies": ["openai.chatgpt"],
+  "capabilities": { "untrustedWorkspaces": { "supported": false } },
+  "contributes": {
+    "commands": [
+      { "command": "codexCustomise.enable", "title": "Enable Custom TODOs", "category": "Codex Customise" },
+      { "command": "codexCustomise.restore", "title": "Restore Original TODOs", "category": "Codex Customise" },
+      { "command": "codexCustomise.settings", "title": "Configure TODOs", "category": "Codex Customise" },
+      { "command": "codexCustomise.selectThread", "title": "Select TODO Target Thread", "category": "Codex Customise" },
+      { "command": "codexCustomise.output", "title": "Show TODO Output", "category": "Codex Customise" }
+    ],
+    "configuration": {
+      "title": "Codex Customise",
+      "properties": {
+        "codexCustomise.enabled": { "type": "boolean", "default": false, "scope": "window", "markdownDescription": "Enable custom TODO actions. Run **Codex Customise: Enable Custom TODOs** to replace the official Codex TODO CodeLens in the workspace, then reload VS Code." },
+        "codexCustomise.trigger": { "type": "string", "default": "TODO", "minLength": 1, "scope": "resource", "description": "Text at the start of a comment, such as TODO, FIXME, //TODO or #TASK. Matching is case-insensitive." },
+        "codexCustomise.message": { "type": "string", "default": "", "scope": "resource", "editPresentation": "multilineText", "markdownDescription": "TODO message template. Press Enter to add a new line. Placeholders: `{comment}`, `{file}`, `{relativeFile}`, `{line}`, `{workspace}`. Leave empty to use the default Codex TODO prompt." },
+        "codexCustomise.targetThreadId": { "type": "string", "default": "", "scope": "resource", "markdownDescription": "Destination Codex thread ID. Run **Codex Customise: Select TODO Target Thread** to choose a local thread. Leave empty to create a new thread for each TODO." },
+        "codexCustomise.codexPath": { "type": "string", "default": "", "scope": "machine-overridable", "restricted": true, "description": "Codex executable path. Empty locates the CLI in the official extension or PATH." },
+        "codexCustomise.codexHome": { "type": "string", "default": "", "scope": "machine-overridable", "restricted": true, "description": "Optional Codex data directory. Empty uses the existing CODEX_HOME or Codex default. The selected thread must belong to this directory." }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p .",
+    "test": "node --test test/*.test.cjs",
+    "test:vscode": "node scripts/test-vscode.cjs",
+    "package": "node -e \"require('fs').mkdirSync('releases',{recursive:true})\" && tsc -p . && vsce package --no-dependencies --allow-missing-repository --out releases/VSCode-Codex-Customise-0.1.4.vsix"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/vscode": "1.96.0",
+    "@vscode/vsce": "^3.0.0",
+    "typescript": "^5.9.0"
+  },
+  "packageManager": "pnpm@11.25.0"
+}

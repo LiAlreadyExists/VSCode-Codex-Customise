@@ -1,0 +1,30 @@
+# Dependencies and generated output
+node_modules/
+dist/
+.test-runs/
+.pnpm-store/
+releases/
+coverage/
+*.vsix
+
+# Local configuration and credentials
+.vscode/
+.idea/
+.codex/
+*.code-workspace
+.env
+.env.*
+.npmrc
+.pnpmrc
+auth.json
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Logs and operating-system metadata
+*.log
+.DS_Store
+._*
+Thumbs.db
+Desktop.ini

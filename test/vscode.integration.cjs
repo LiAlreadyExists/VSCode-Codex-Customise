@@ -1,0 +1,106 @@
+const vscode = require('vscode');
+const fs = require('node:fs');
+const path = require('node:path');
+const assert = require('node:assert/strict');
+exports.run = async () => {
+  const root = process.env.CODEX_CUSTOMISE_TEST_ROOT;
+  assert.ok(root, 'Isolated profile required');
+  const workspace = path.join(root, 'workspace');
+  assert.equal(vscode.workspace.workspaceFolders[0].uri.fsPath, workspace);
+  const extension = vscode.extensions.getExtension('local-customise.vscode-codex-customise');
+  assert.ok(extension, 'Extension installed');
+  assert.equal(extension.packageJSON.displayName, 'VSCode-Codex-Customise');
+  await extension.activate();
+  await vscode.extensions.getExtension('openai.chatgpt').activate();
+  const settings = vscode.workspace.getConfiguration('codexCustomise');
+  const set = (key, value) => settings.update(key, value, vscode.ConfigurationTarget.Workspace);
+  const fixture = async (name, text) => {
+    const uri = vscode.Uri.file(path.join(workspace, name));
+    fs.writeFileSync(uri.fsPath, text);
+    const document = await vscode.workspace.openTextDocument(uri);
+    await vscode.window.showTextDocument(document);
+    return document;
+  };
+  const lenses = document => vscode.commands.executeCommand('vscode.executeCodeLensProvider', document.uri);
+  const runLens = async document => {
+    const lens = (await lenses(document)).find(x => x.command?.command === 'codexCustomise.implement');
+    assert.ok(lens, 'Custom CodeLens appears');
+    assert.equal(lens.command.title, 'Implement with Codex');
+    await vscode.commands.executeCommand(lens.command.command, ...lens.command.arguments);
+  };
+  const results = [];
+  const doc = await fixture('default.ts', '//TODO: default task\n');
+  assert.equal(settings.get('enabled'), false);
+  let actions = await lenses(doc);
+  assert.equal(actions.filter(x => x.command?.command === 'codexCustomise.implement').length, 0);
+  assert.equal(actions.filter(x => x.command?.command === 'chatgpt.implementTodo').length, 1);
+  results.push('Unconfigured extension preserves original TODO action');
+
+  await vscode.commands.executeCommand('codexCustomise.enable');
+  assert.equal(vscode.workspace.getConfiguration('chatgpt').get('commentCodeLensEnabled'), false);
+  await set('trigger', '//TASK');
+  const triggerDoc = await fixture('trigger.ts', 'const label = "//TASK: ignore";\n//TASK: implement the fixture\n');
+  actions = await lenses(triggerDoc);
+  assert.equal(actions.length, 1);
+  await runLens(triggerDoc);
+  const native = JSON.parse(fs.readFileSync(path.join(root, 'native-call.json')));
+  assert.deepEqual(native, { fileName: triggerDoc.uri.fsPath, cwd: workspace, line: 2, comment: 'implement the fixture' });
+  results.push('Custom trigger delegates exact file, line and comment to native action');
+
+  await set('message', 'Implement {comment} in {relativeFile}:{line}');
+  await runLens(triggerDoc);
+  let requests = fs.readFileSync(path.join(root, 'codex-home/requests.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  let turns = requests.filter(x => x.method === 'turn/start');
+  assert.equal(turns.at(-1).params.input[0].text, 'Implement implement the fixture in trigger.ts:2');
+  assert.equal(turns.at(-1).params.threadId, 'new-fixture');
+  results.push('Custom prompt runs in a new local thread');
+
+  await set('targetThreadId', 'saved-1');
+  await runLens(triggerDoc);
+  requests = fs.readFileSync(path.join(root, 'codex-home/requests.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(requests.filter(x => x.method === 'turn/start').length, turns.length);
+  assert.equal(requests.some(x => x.method === 'thread/resume'), false);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(root, 'native-route.json'))).path, '/local/saved-1');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(root, 'owner-call.json'))).params.conversationId, 'saved-1');
+  results.push('Unloaded selected chat opens in Codex and waits for its owner without a separate resume');
+
+  await set('trigger', '%codex');
+  await set('targetThreadId', 'owned-fixture');
+  const ownedDoc = await fixture('test.tex', '%codex original comment\n');
+  const savedText = fs.readFileSync(ownedDoc.uri.fsPath, 'utf8');
+  const unsaved = new vscode.WorkspaceEdit();
+  unsaved.replace(ownedDoc.uri, new vscode.Range(0, 0, 1, 0), '%codex unsaved comment\n');
+  await vscode.workspace.applyEdit(unsaved);
+  assert.equal(ownedDoc.isDirty, true);
+  await runLens(ownedDoc);
+  const ownerCall = JSON.parse(fs.readFileSync(path.join(root, 'owner-call.json')));
+  assert.equal(ownerCall.params.conversationId, 'owned-fixture');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(root, 'native-route.json'))).path, '/local/owned-fixture');
+  assert.equal(ownerCall.params.turnStart.request.input[0].text, 'Implement unsaved comment in test.tex:1');
+  assert.equal(ownedDoc.isDirty, true, 'TODO must not force-save an editor buffer');
+  assert.equal(fs.readFileSync(ownedDoc.uri.fsPath, 'utf8'), savedText);
+  assert.equal(fs.readFileSync(path.join(root, 'codex-home/requests.jsonl'), 'utf8').trim().split('\n').map(JSON.parse).filter(x => x.method === 'turn/start').length, turns.length);
+  results.push('Open chat receives the unsaved TODO through its owner without a save dialog or forced save');
+  await runLens(ownedDoc);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(root, 'owner-call.json'))).params.conversationId, 'owned-fixture');
+  assert.equal(ownedDoc.isDirty, true);
+  assert.equal(fs.readFileSync(path.join(root, 'codex-home/requests.jsonl'), 'utf8').trim().split('\n').map(JSON.parse).filter(x => x.method === 'turn/start').length, turns.length);
+  results.push('Repeated target submissions remain on the same owner connection path');
+  await set('trigger', '//TASK');
+
+  const old = (await lenses(triggerDoc)).find(x => x.command?.command === 'codexCustomise.implement');
+  const edit = new vscode.WorkspaceEdit();
+  edit.insert(triggerDoc.uri, new vscode.Position(0, 0), '//new line\n');
+  await vscode.workspace.applyEdit(edit);
+  await triggerDoc.save();
+  await assert.rejects(vscode.commands.executeCommand(old.command.command, ...old.command.arguments), /comment changed/i);
+  results.push('Stale CodeLens cannot submit a changed comment');
+
+  await vscode.commands.executeCommand('codexCustomise.restore');
+  assert.equal(settings.get('enabled'), false);
+  assert.equal(vscode.workspace.getConfiguration('chatgpt').get('commentCodeLensEnabled'), true);
+  assert.equal((await lenses(doc)).filter(x => x.command?.command === 'codexCustomise.implement').length, 0);
+  results.push('Restore returns the previous Codex TODO preference');
+  assert.equal(fs.readFileSync(path.join(root, 'protected.txt'), 'utf8'), 'protected fixture');
+  fs.writeFileSync(path.join(root, 'results.json'), JSON.stringify({ passed: results, originalUserFilesUsed: false }, null, 2));
+};

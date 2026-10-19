@@ -2,27 +2,29 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { findTodos, buildPrompt, usesNativeAction } = require('../dist/todo');
 
-test('detects comment TODOs and excludes ordinary strings and word prefixes', () => {
-  const source = 'const a = "//TODO: not code";\n//TODO: implement sum\n# TODO other\n-- TODO sql\n/*\n * TODO block\n * continuation\n */\n// TODOsomething\n';
+test('matches triggers inside quotes, after unmatched quotes and inside words', () => {
+  const source = 'const a = "//TODO: quoted";\nLet $Q\' match a state.\n//TODO: implement sum\nTODOsomething\n';
   const matches = findTodos(source, 'TODO');
-  assert.deepEqual(matches.map(x => x.comment), ['implement sum', 'other', 'sql', 'block\ncontinuation']);
-  assert.equal(source.slice(matches[0].offset, matches[0].offset + 2), '//');
+  assert.deepEqual(matches.map(x => x.comment), [': quoted";', ': implement sum', 'something']);
+  assert.equal(source.slice(matches[0].offset, matches[0].offset + 4), 'TODO');
+  assert.equal(findTodos("Let $Q' be a state.\n%codex draw a graph", '%codex').length, 1);
 });
-test('custom markers are literal and explicit comment prefixes are supported', () => {
-  assert.deepEqual(findTodos('//FIXME fix\n//TODO no\n# FIXME yes', 'FIXME').map(x => x.comment), ['fix', 'yes']);
-  assert.deepEqual(findTodos('//TODO: one\n#TODO: two', '//TODO').map(x => x.comment), ['one']);
-  assert.equal(findTodos('// TODO: spaced', '// TODO')[0].comment, 'spaced');
-  assert.equal(findTodos('// [do.*] fix', '[do.*]')[0].comment, 'fix');
+test('matches exact literal text anywhere on a line', () => {
+  assert.deepEqual(findTodos('prefix FIXME fix\nfixme no\n# FIXME yes', 'FIXME').map(x => x.comment), [' fix', ' yes']);
+  assert.deepEqual(findTodos('//TODO: one\n#TODO: two', '//TODO').map(x => x.comment), [': one']);
+  assert.equal(findTodos('// TODO: spaced', '//TODO').length, 0);
+  assert.equal(findTodos('// TODO: spaced', '// TODO')[0].comment, ': spaced');
+  assert.equal(findTodos('// [do.*] fix', '[do.*]')[0].comment, ' fix');
+  assert.equal(findTodos('anything %codex rest', '%codex')[0].comment, ' rest');
   assert.equal(findTodos('//TODO', '').length, 0);
-  assert.equal(findTodos('//TODO', 'TODO\n').length, 1);
+  assert.equal(findTodos('//TODO', 'TODO\n').length, 0);
   assert.equal(findTodos('//TODO', 'TO\nDO').length, 0);
 });
-test('supports block/HTML comments, CRLF, Python strings and TeX/Matlab comments', () => {
-  assert.equal(findTodos('<!-- TASK: layout -->', 'TASK')[0].comment, 'layout');
-  assert.equal(findTodos('//TODO: win\r\n', 'todo')[0].comment, 'win');
-  assert.equal(findTodos('"""\n# TODO: string\n"""\n# TODO: real', 'TODO', 'python').length, 1);
-  assert.equal(findTodos('%TODO: equation', '%TODO', 'latex')[0].comment, 'equation');
-  assert.equal(findTodos('x % TODO', 'TODO', 'javascript').length, 0);
+test('preserves punctuation, whitespace and comment formatting after the trigger', () => {
+  assert.equal(findTodos('<!-- TASK: layout -->', 'TASK')[0].comment, ': layout -->');
+  assert.equal(findTodos('//TODO- \twin  \r\n', 'TODO')[0].comment, '- \twin  ');
+  assert.equal(findTodos('/* TODO * formatting */', 'TODO')[0].comment, ' * formatting */');
+  assert.equal(findTodos('"""\n# TODO: string\n"""\n# TODO: real', 'TODO').length, 2);
 });
 test('expands only known placeholders once and preserves exact custom messages', () => {
   const context = { file: '/fixture/src/a.ts', workspace: '/fixture', line: 7, comment: 'keep {line}' };
@@ -31,6 +33,8 @@ test('expands only known placeholders once and preserves exact custom messages',
   const original = buildPrompt(context, '');
   assert.match(original, /\/fixture\/src\/a.ts:7/);
   assert.match(original, /Once you are done, remove the comment\.$/);
+  assert.ok(buildPrompt({ ...context, comment: ' : exact  ' }, '').includes('The comment is:\n : exact  \n\n'));
+  assert.equal(buildPrompt({ ...context, file: 'untitled:Untitled-1' }, '{relativeFile}'), 'untitled:Untitled-1');
   assert.equal(usesNativeAction('', ''), true);
   assert.equal(usesNativeAction('custom', ''), false);
   assert.equal(usesNativeAction('', 'saved-1'), false);

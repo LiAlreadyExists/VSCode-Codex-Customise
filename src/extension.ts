@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'node:path';
+import * as os from 'node:os';
 import * as fs from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { CodexRpc, JsonObject } from './rpc';
@@ -20,6 +21,10 @@ export function activate(context: vscode.ExtensionContext): void {
   let busy = false;
   let warnedConflict = false;
   const config = (uri?: vscode.Uri) => vscode.workspace.getConfiguration(namespace, uri);
+  const configurationTarget = () => vscode.workspace.workspaceFolders?.length ? vscode.ConfigurationTarget.Workspace : vscode.ConfigurationTarget.Global;
+  const savedSettings = () => configurationTarget() === vscode.ConfigurationTarget.Workspace ? context.workspaceState : context.globalState;
+  const originalSetting = (native: vscode.WorkspaceConfiguration) => configurationTarget() === vscode.ConfigurationTarget.Workspace
+    ? native.inspect<boolean>(nativeSetting)?.workspaceValue : native.inspect<boolean>(nativeSetting)?.globalValue;
   const reportError = (error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
     output.appendLine(`Error: ${message}`);
@@ -33,33 +38,31 @@ export function activate(context: vscode.ExtensionContext): void {
     });
   };
   const enable = async () => {
-    requireWorkspace();
     const native = vscode.workspace.getConfiguration('chatgpt');
-    const previous = native.inspect<boolean>(nativeSetting)?.workspaceValue;
-    if (!context.workspaceState.get(savedSettingKey)) {
-      await context.workspaceState.update(savedSettingKey, { hadValue: previous !== undefined, value: previous } satisfies SavedSetting);
+    const previous = originalSetting(native);
+    if (!savedSettings().get(savedSettingKey)) {
+      await savedSettings().update(savedSettingKey, { hadValue: previous !== undefined, value: previous } satisfies SavedSetting);
     }
-    await native.update(nativeSetting, false, vscode.ConfigurationTarget.Workspace);
-    try { await config().update('enabled', true, vscode.ConfigurationTarget.Workspace); }
+    await native.update(nativeSetting, false, configurationTarget());
+    try { await config().update('enabled', true, configurationTarget()); }
     catch (error) {
-      await native.update(nativeSetting, previous, vscode.ConfigurationTarget.Workspace);
+      await native.update(nativeSetting, previous, configurationTarget());
       throw error;
     }
     changed.fire(); reloadNotice();
   };
   const restore = async () => {
-    requireWorkspace();
-    await config().update('enabled', false, vscode.ConfigurationTarget.Workspace);
-    const saved = context.workspaceState.get<SavedSetting>(savedSettingKey);
+    await config().update('enabled', false, configurationTarget());
+    const saved = savedSettings().get<SavedSetting>(savedSettingKey);
     const native = vscode.workspace.getConfiguration('chatgpt');
-    if (saved && native.inspect<boolean>(nativeSetting)?.workspaceValue === false) {
-      await native.update(nativeSetting, saved.hadValue ? saved.value : undefined, vscode.ConfigurationTarget.Workspace);
+    if (saved && originalSetting(native) === false) {
+      await native.update(nativeSetting, saved.hadValue ? saved.value : undefined, configurationTarget());
     }
-    await context.workspaceState.update(savedSettingKey, undefined);
+    await savedSettings().update(savedSettingKey, undefined);
     changed.fire(); reloadNotice();
   };
   const canProvide = () => {
-    if (!vscode.workspace.isTrusted || !config().get('enabled', false)) return false;
+    if (!config().get('enabled', false)) return false;
     if (vscode.workspace.getConfiguration('chatgpt').get(nativeSetting, true)) {
       if (!warnedConflict) {
         warnedConflict = true;
@@ -74,8 +77,8 @@ export function activate(context: vscode.ExtensionContext): void {
   const provider: vscode.CodeLensProvider = {
     onDidChangeCodeLenses: changed.event,
     provideCodeLenses(document, token) {
-      if (!canProvide() || token.isCancellationRequested || !vscode.workspace.getWorkspaceFolder(document.uri)) return [];
-      return findTodos(document.getText(), config(document.uri).get('trigger', 'TODO'), document.languageId).map(match => {
+      if (!canProvide() || token.isCancellationRequested) return [];
+      return findTodos(document.getText(), config(document.uri).get('trigger', 'TODO')).map(match => {
         const position = document.positionAt(match.offset);
         return new vscode.CodeLens(new vscode.Range(position, position), {
           title: 'Implement with Codex', command: `${namespace}.implement`,
@@ -84,29 +87,25 @@ export function activate(context: vscode.ExtensionContext): void {
       });
     },
   };
-  const newClient = async (folder: vscode.WorkspaceFolder, uri?: vscode.Uri) => {
-    const settings = config(uri ?? folder.uri);
+  const newClient = async (cwd: string, uri?: vscode.Uri) => {
+    const settings = config(uri);
     const executable = await resolveCodex(settings.get('codexPath', ''));
     const home = settings.get<string>('codexHome', '').trim();
     if (home && !path.isAbsolute(home)) throw new Error('Codex Home must be an absolute path.');
-    return new CodexRpc({ executable, cwd: folder.uri.fsPath, home: home || undefined,
+    return new CodexRpc({ executable, cwd, home: home || undefined,
       requestHandler: handleServerRequest, log: text => output.append(text),
     });
   };
   const implement = async (argument: LensArgument) => {
-    if (!vscode.workspace.isTrusted) throw new Error('Trust the workspace before running Codex.');
-    if (!canProvide()) throw new Error('Enable custom TODOs for this workspace first.');
+    if (!canProvide()) throw new Error('Enable custom TODOs first.');
     if (!argument || typeof argument.uri !== 'string' || !Number.isInteger(argument.offset)) throw new Error('Invalid TODO location.');
     const uri = vscode.Uri.parse(argument.uri);
-    if (uri.scheme !== 'file') throw new Error('Save this document to a local file first.');
-    const folder = vscode.workspace.getWorkspaceFolder(uri);
-    if (!folder) throw new Error('Open the file’s project folder before running Codex.');
     const document = await vscode.workspace.openTextDocument(uri);
     const settings = config(uri);
-    const match = findTodos(document.getText(), settings.get('trigger', 'TODO'), document.languageId)
+    const match = findTodos(document.getText(), settings.get('trigger', 'TODO'))
       .find(item => item.offset === argument.offset && item.raw === argument.raw);
     if (document.version !== argument.version || !match) throw new Error('The comment changed. Click its refreshed TODO action.');
-    const todo: TodoContext = { file: uri.fsPath, workspace: folder.uri.fsPath, line: document.positionAt(match.offset).line + 1, comment: match.comment };
+    const todo: TodoContext = { file: uri.scheme === 'file' ? uri.fsPath : uri.toString(true), workspace: workingDirectory(uri), line: document.positionAt(match.offset).line + 1, comment: match.comment };
     const message = settings.get('message', '');
     const targetThreadId = settings.get<string>('targetThreadId', '').trim();
     if (usesNativeAction(message, targetThreadId)) {
@@ -136,7 +135,7 @@ export function activate(context: vscode.ExtensionContext): void {
         output.appendLine(`\nThread: ${sent.threadId}\nTurn: ${sent.turnId}\nTODO sent. Follow progress and approvals in the selected Codex chat.`);
         return;
       }
-      const client = await newClient(folder, uri);
+      const client = await newClient(todo.workspace, uri);
       runningClient = client;
       output.show(true);
       output.appendLine(`\n${todo.file}:${todo.line}\n${buildPrompt(todo, message)}\n`);
@@ -165,9 +164,13 @@ export function activate(context: vscode.ExtensionContext): void {
     } finally { busy = false; }
   };
   const selectThread = async () => {
-    const folder = await chooseWorkspace();
-    if (!folder) return;
-    const client = await newClient(folder);
+    let uri = vscode.window.activeTextEditor?.document.uri ?? vscode.workspace.workspaceFolders?.[0]?.uri;
+    if ((vscode.workspace.workspaceFolders?.length ?? 0) > 1 && (!uri || !vscode.workspace.getWorkspaceFolder(uri))) {
+      const folder = await vscode.window.showWorkspaceFolderPick();
+      if (!folder) return;
+      uri = folder.uri;
+    }
+    const client = await newClient(workingDirectory(uri), uri);
     try {
       const threads = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'Loading Codex threads' }, () => listThreads(client));
       const items = [{ label: 'New thread', description: 'Default', detail: '', id: '' }, ...threads.map(thread => ({
@@ -176,8 +179,8 @@ export function activate(context: vscode.ExtensionContext): void {
       }))];
       const choice = await vscode.window.showQuickPick(items, { title: 'TODO target thread', matchOnDescription: true, matchOnDetail: true, placeHolder: 'Choose an idle local thread or create a new thread for each TODO' });
       if (choice) {
-        const scope = vscode.workspace.workspaceFolders!.length > 1 ? vscode.ConfigurationTarget.WorkspaceFolder : vscode.ConfigurationTarget.Workspace;
-        await config(folder.uri).update('targetThreadId', choice.id, scope);
+        const scope = (vscode.workspace.workspaceFolders?.length ?? 0) > 1 ? vscode.ConfigurationTarget.WorkspaceFolder : configurationTarget();
+        await config(uri).update('targetThreadId', choice.id, scope);
       }
     } finally { client.dispose(); }
   };
@@ -189,21 +192,17 @@ export function activate(context: vscode.ExtensionContext): void {
   register('enable', enable); register('restore', restore); register('implement', implement); register('selectThread', selectThread);
   register('settings', () => vscode.commands.executeCommand('workbench.action.openSettings', '@ext:local-customise.vscode-codex-customise'));
   register('output', () => output.show(true));
-  context.subscriptions.push(output, changed, vscode.languages.registerCodeLensProvider({ scheme: 'file' }, provider),
+  context.subscriptions.push(output, changed, vscode.languages.registerCodeLensProvider('*', provider),
     vscode.workspace.onDidChangeConfiguration(event => {
       if (event.affectsConfiguration(namespace) || event.affectsConfiguration(`chatgpt.${nativeSetting}`)) changed.fire();
-    }), vscode.workspace.onDidGrantWorkspaceTrust(() => changed.fire()));
+    }));
 }
 
-function requireWorkspace(): void {
-  if (!vscode.workspace.isTrusted) throw new Error('Trust the workspace before configuring Codex.');
-  if (!vscode.workspace.workspaceFolders?.length) throw new Error('Open a project folder first.');
-}
-async function chooseWorkspace(): Promise<vscode.WorkspaceFolder | undefined> {
-  requireWorkspace();
-  const current = vscode.window.activeTextEditor?.document.uri;
-  const folder = current && vscode.workspace.getWorkspaceFolder(current);
-  return folder || (vscode.workspace.workspaceFolders!.length === 1 ? vscode.workspace.workspaceFolders![0] : await vscode.window.showWorkspaceFolderPick());
+function workingDirectory(uri?: vscode.Uri): string {
+  const folder = uri && vscode.workspace.getWorkspaceFolder(uri);
+  if (folder) return folder.uri.fsPath;
+  if (uri?.scheme === 'file') return path.dirname(uri.fsPath);
+  return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? os.homedir();
 }
 async function resolveCodex(configured: string): Promise<string> {
   if (configured.trim()) {

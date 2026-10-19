@@ -46,7 +46,7 @@ export class CodexRpc extends EventEmitter {
       this.fail(new Error(`Codex disconnected (${signal ?? code ?? 'closed'}). Check thread status before retrying.`));
     });
     await this.request('initialize', {
-      clientInfo: { name: 'vscode_codex_customise', title: 'VSCode-Codex-Customise', version: '0.1.4' },
+      clientInfo: { name: 'vscode_codex_customise', title: 'VSCode-Codex-Customise', version: '0.1.5' },
       capabilities: { experimentalApi: false },
     });
     this.write({ method: 'initialized', params: {} });

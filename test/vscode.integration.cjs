@@ -22,8 +22,8 @@ exports.run = async () => {
     return document;
   };
   const lenses = document => vscode.commands.executeCommand('vscode.executeCodeLensProvider', document.uri);
-  const runLens = async document => {
-    const lens = (await lenses(document)).find(x => x.command?.command === 'codexCustomise.implement');
+  const runLens = async (document, index = 0) => {
+    const lens = (await lenses(document)).filter(x => x.command?.command === 'codexCustomise.implement')[index];
     assert.ok(lens, 'Custom CodeLens appears');
     assert.equal(lens.command.title, 'Implement with Codex');
     await vscode.commands.executeCommand(lens.command.command, ...lens.command.arguments);
@@ -39,24 +39,24 @@ exports.run = async () => {
   await vscode.commands.executeCommand('codexCustomise.enable');
   assert.equal(vscode.workspace.getConfiguration('chatgpt').get('commentCodeLensEnabled'), false);
   await set('trigger', '//TASK');
-  const triggerDoc = await fixture('trigger.ts', 'const label = "//TASK: ignore";\n//TASK: implement the fixture\n');
+  const triggerDoc = await fixture('trigger.ts', 'const label = "//TASK: quoted";\n//TASK: implement the fixture\n');
   actions = await lenses(triggerDoc);
-  assert.equal(actions.length, 1);
-  await runLens(triggerDoc);
+  assert.equal(actions.length, 2);
+  await runLens(triggerDoc, 1);
   const native = JSON.parse(fs.readFileSync(path.join(root, 'native-call.json')));
-  assert.deepEqual(native, { fileName: triggerDoc.uri.fsPath, cwd: workspace, line: 2, comment: 'implement the fixture' });
+  assert.deepEqual(native, { fileName: triggerDoc.uri.fsPath, cwd: workspace, line: 2, comment: ': implement the fixture' });
   results.push('Custom trigger delegates exact file, line and comment to native action');
 
   await set('message', 'Implement {comment} in {relativeFile}:{line}');
-  await runLens(triggerDoc);
+  await runLens(triggerDoc, 1);
   let requests = fs.readFileSync(path.join(root, 'codex-home/requests.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
   let turns = requests.filter(x => x.method === 'turn/start');
-  assert.equal(turns.at(-1).params.input[0].text, 'Implement implement the fixture in trigger.ts:2');
+  assert.equal(turns.at(-1).params.input[0].text, 'Implement : implement the fixture in trigger.ts:2');
   assert.equal(turns.at(-1).params.threadId, 'new-fixture');
   results.push('Custom prompt runs in a new local thread');
 
   await set('targetThreadId', 'saved-1');
-  await runLens(triggerDoc);
+  await runLens(triggerDoc, 1);
   requests = fs.readFileSync(path.join(root, 'codex-home/requests.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
   assert.equal(requests.filter(x => x.method === 'turn/start').length, turns.length);
   assert.equal(requests.some(x => x.method === 'thread/resume'), false);
@@ -76,7 +76,7 @@ exports.run = async () => {
   const ownerCall = JSON.parse(fs.readFileSync(path.join(root, 'owner-call.json')));
   assert.equal(ownerCall.params.conversationId, 'owned-fixture');
   assert.equal(JSON.parse(fs.readFileSync(path.join(root, 'native-route.json'))).path, '/local/owned-fixture');
-  assert.equal(ownerCall.params.turnStart.request.input[0].text, 'Implement unsaved comment in test.tex:1');
+  assert.equal(ownerCall.params.turnStart.request.input[0].text, 'Implement  unsaved comment in test.tex:1');
   assert.equal(ownedDoc.isDirty, true, 'TODO must not force-save an editor buffer');
   assert.equal(fs.readFileSync(ownedDoc.uri.fsPath, 'utf8'), savedText);
   assert.equal(fs.readFileSync(path.join(root, 'codex-home/requests.jsonl'), 'utf8').trim().split('\n').map(JSON.parse).filter(x => x.method === 'turn/start').length, turns.length);

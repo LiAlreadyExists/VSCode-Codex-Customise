@@ -86,6 +86,16 @@ exports.run = async () => {
   assert.equal(ownedDoc.isDirty, true);
   assert.equal(fs.readFileSync(path.join(root, 'codex-home/requests.jsonl'), 'utf8').trim().split('\n').map(JSON.parse).filter(x => x.method === 'turn/start').length, turns.length);
   results.push('Repeated target submissions remain on the same owner connection path');
+  fs.writeFileSync(path.join(root, 'codex-home/control.json'), JSON.stringify({ queue: true }));
+  await runLens(ownedDoc);
+  requests = fs.readFileSync(path.join(root, 'codex-home/requests.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  const queued = requests.filter(x => x.method === 'thread/queue/add');
+  assert.equal(queued.length, 1);
+  assert.equal(queued[0].params.threadId, 'owned-fixture');
+  assert.equal(queued[0].params.input[0].text, 'Implement  unsaved comment in test.tex:1');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(root, 'native-route.json'))).path, '/local/owned-fixture');
+  assert.equal(requests.some(x => x.method === 'thread/resume'), false);
+  results.push('Selected chat receives the exact TODO once through the current Codex queue');
   await set('trigger', '//TASK');
 
   const old = (await lenses(triggerDoc)).find(x => x.command?.command === 'codexCustomise.implement');

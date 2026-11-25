@@ -5,7 +5,7 @@ import { EventEmitter } from 'node:events';
 export type JsonObject = Record<string, any>;
 export interface RpcOptions {
   executable: string; args?: string[]; cwd: string; home?: string; env?: NodeJS.ProcessEnv;
-  timeoutMs?: number; requestHandler: (method: string, params: JsonObject) => Promise<unknown>;
+  experimentalApi?: boolean; timeoutMs?: number; requestHandler: (method: string, params: JsonObject) => Promise<unknown>;
   log?: (message: string) => void;
 }
 export class RpcError extends Error {
@@ -46,8 +46,8 @@ export class CodexRpc extends EventEmitter {
       this.fail(new Error(`Codex disconnected (${signal ?? code ?? 'closed'}). Check thread status before retrying.`));
     });
     await this.request('initialize', {
-      clientInfo: { name: 'vscode_codex_customise', title: 'VSCode-Codex-Customise', version: '0.1.5' },
-      capabilities: { experimentalApi: false },
+      clientInfo: { name: 'vscode_codex_customise', title: 'VSCode-Codex-Customise', version: '0.1.6' },
+      capabilities: { experimentalApi: this.options.experimentalApi ?? false },
     });
     this.write({ method: 'initialized', params: {} });
   }

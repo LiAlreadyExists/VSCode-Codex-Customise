@@ -2,7 +2,7 @@
   "name": "vscode-codex-customise",
   "displayName": "VSCode-Codex-Customise",
   "description": "Custom TODO triggers, prompts and destination threads for Codex.",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "publisher": "local-customise",
   "license": "MIT",
   "engines": { "vscode": "^1.96.2" },
@@ -37,7 +37,7 @@
     "compile": "tsc -p .",
     "test": "node --test test/*.test.cjs",
     "test:vscode": "node scripts/test-vscode.cjs",
-    "package": "node -e \"require('fs').mkdirSync('releases',{recursive:true})\" && tsc -p . && vsce package --no-dependencies --allow-missing-repository --out releases/VSCode-Codex-Customise-0.1.5.vsix"
+    "package": "node -e \"require('fs').mkdirSync('releases',{recursive:true})\" && tsc -p . && vsce package --no-dependencies --allow-missing-repository --out releases/VSCode-Codex-Customise-0.1.6.vsix"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

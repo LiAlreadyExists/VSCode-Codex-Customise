@@ -5,7 +5,7 @@ import * as fs from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { CodexRpc, JsonObject } from './rpc';
 import { buildPrompt, findTodos, TodoContext, usesNativeAction } from './todo';
-import { listThreads, runTodo } from './runner';
+import { listThreads, queueTodo, runTodo } from './runner';
 import { sendToOwner } from './owner';
 
 const namespace = 'codexCustomise';
@@ -87,12 +87,12 @@ export function activate(context: vscode.ExtensionContext): void {
       });
     },
   };
-  const newClient = async (cwd: string, uri?: vscode.Uri) => {
+  const newClient = async (cwd: string, uri?: vscode.Uri, experimentalApi = false) => {
     const settings = config(uri);
     const executable = await resolveCodex(settings.get('codexPath', ''));
     const home = settings.get<string>('codexHome', '').trim();
     if (home && !path.isAbsolute(home)) throw new Error('Codex Home must be an absolute path.');
-    return new CodexRpc({ executable, cwd, home: home || undefined,
+    return new CodexRpc({ executable, cwd, home: home || undefined, experimentalApi,
       requestHandler: handleServerRequest, log: text => output.append(text),
     });
   };
@@ -122,17 +122,26 @@ export function activate(context: vscode.ExtensionContext): void {
     try {
       if (targetThreadId) {
         await vscode.extensions.getExtension('openai.chatgpt')?.activate();
-        const sent = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'Sending TODO to Codex' }, async () => {
-          return sendToOwner({
-            threadId: targetThreadId, cwd: todo.workspace, prompt: buildPrompt(todo, message),
+        const prompt = buildPrompt(todo, message);
+        const openChat = async () => {
+          const route = vscode.Uri.parse(`${vscode.env.uriScheme}://openai.chatgpt/local/${encodeURIComponent(targetThreadId)}`);
+          if (!await vscode.env.openExternal(route)) throw new Error('Could not open the selected Codex chat. The TODO was not sent.');
+        };
+        await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'Sending TODO to Codex' }, async () => {
+          const client = await newClient(todo.workspace, uri, true);
+          try {
+            if (await queueTodo(client, targetThreadId, prompt, openChat)) {
+              output.appendLine(`TODO queued in Codex chat ${targetThreadId}.`);
+              return;
+            }
+          } finally { client.dispose(); }
+
+          const sent = await sendToOwner({
+            threadId: targetThreadId, cwd: todo.workspace, prompt, openChat,
             home: settings.get<string>('codexHome', '').trim() || undefined,
-            openChat: async () => {
-              const uri = vscode.Uri.parse(`${vscode.env.uriScheme}://openai.chatgpt/local/${encodeURIComponent(targetThreadId)}`);
-              if (!await vscode.env.openExternal(uri)) throw new Error('Could not open the selected Codex chat. The TODO was not sent.');
-            },
           });
+          output.appendLine(`Thread: ${sent.threadId}\nTurn: ${sent.turnId}\nTODO sent. Follow progress and approvals in the selected Codex chat.`);
         });
-        output.appendLine(`\nThread: ${sent.threadId}\nTurn: ${sent.turnId}\nTODO sent. Follow progress and approvals in the selected Codex chat.`);
         return;
       }
       const client = await newClient(todo.workspace, uri);

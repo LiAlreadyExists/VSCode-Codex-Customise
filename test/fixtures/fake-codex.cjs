@@ -35,7 +35,12 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   if (control.unsupported === method) { send({ id, error: { code: -32601, message: 'Method not found' } }); return; }
   if (control.timeout === method) return;
   if (method === 'initialize') reply(id, { userAgent: 'synthetic-codex/1.0' });
-  else if (method === 'thread/list') {
+  else if (method === 'thread/queue/list') {
+    if (control.queue) reply(id, { data: [], nextCursor: null });
+    else send({ id, error: { code: -32601, message: 'Method not found' } });
+  } else if (method === 'thread/queue/add' && control.queue) {
+    reply(id, { queuedSubmission: { id: 'queued-fixture', clientUserMessageId: params.clientUserMessageId } });
+  } else if (method === 'thread/list') {
     const data = params.cursor ? [{ id: 'saved-2', name: 'Second fixture', cwd }] : [{ id: 'saved-1', name: 'First fixture', cwd }];
     reply(id, { data, nextCursor: params.cursor || !control.paginate ? null : 'page-2' });
   } else if (method === 'thread/start') reply(id, { thread: { id: 'new-fixture', cwd, status: { type: 'idle' } } });

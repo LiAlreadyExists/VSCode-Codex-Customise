@@ -49,7 +49,7 @@ Run **Codex Customise: Select TODO Target Thread** to choose an idle local chat.
 
 Custom messages sent to new chats show progress in the **VSCode-Codex-Customise** Output channel. Other actions use the Codex chat interface.
 
-Custom messages and selected-chat runs use workspace-write permissions with network access disabled. These execution settings can carry over to later turns in the selected chat. Existing-chat routing depends on internal Codex APIs and may require updates when Codex changes.
+Selected-chat TODOs use the Codex message queue and run with the chat’s settings. Older Codex versions without the queue use the legacy chat connection. Custom messages sent to new chats use workspace-write permissions with network access disabled.
 
 ## Restore official TODO actions
 

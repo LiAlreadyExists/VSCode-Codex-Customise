@@ -1,4 +1,5 @@
-import { CodexRpc, JsonObject } from './rpc';
+import { randomUUID } from 'node:crypto';
+import { CodexRpc, JsonObject, RpcError } from './rpc';
 
 export interface ThreadSummary { id: string; name?: string | null; preview?: string; cwd?: string; status?: { type: string } }
 export interface RunOptions {
@@ -23,6 +24,31 @@ export async function listThreads(client: CodexRpc): Promise<ThreadSummary[]> {
     if (cursor) seen.add(cursor);
   } while (cursor);
   return threads;
+}
+
+/** Returns false only when the read-only probe identifies a pre-queue server. */
+export async function queueTodo(client: CodexRpc, threadId: string, prompt: string, openChat: () => Promise<void>): Promise<boolean> {
+  await client.start();
+  try {
+    await client.request('thread/queue/list', { threadId, limit: 1 });
+  } catch (error) {
+    if (error instanceof RpcError && (error.code === -32601 ||
+      (error.code === -32600 && /unknown variant .thread\/queue\/list./i.test(error.message)))) return false;
+    throw error;
+  }
+
+  const { thread } = await client.request('thread/read', { threadId, includeTurns: false });
+  if (thread?.id !== threadId) throw new Error('Codex returned a different chat. The TODO was not sent.');
+  if (thread.status?.type === 'active') throw new Error('The selected chat is running. Wait for it to finish before sending this TODO.');
+  await openChat();
+  const clientUserMessageId = randomUUID();
+  const response = await client.request('thread/queue/add', {
+    threadId, clientUserMessageId, input: [{ type: 'text', text: prompt, text_elements: [] }],
+  });
+  if (!response.queuedSubmission?.id || response.queuedSubmission.clientUserMessageId !== clientUserMessageId) {
+    throw new Error('Codex did not confirm the queued TODO. Check the selected chat before retrying.');
+  }
+  return true;
 }
 
 export async function runTodo(client: CodexRpc, options: RunOptions): Promise<RunResult> {
